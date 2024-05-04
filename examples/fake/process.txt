@@ -1,0 +1,40 @@
+# FICHIER DE COMMANDE POUR TRAITER UNE IMAGE 3D
+
+# Supression ou pas du contenant cylindrique
+eraseCylinder 0
+xminCyl 156
+xmaxCyl 847
+yminCyl 165
+ymaxCyl 856
+zminCyl 31
+zmaxCyl 364
+
+# pour la procédure d'identification des spheres à partir d'une distance map 
+rmin 40
+nmax 1000
+
+# pour contruire une liste de voisins et fermer les zones de contact
+distance_max 10
+contactCapThickness 10 # épaisseur des capsules de contact
+
+# nom du fichier TIF 3D
+filenameTIF fake.tif
+
+# realiser un lissage (ou pas si on l'a déjà fait avec imajeJ par exemple)
+blur 0
+blurSigma 1.5
+
+# realiser un seuillage (ou pas si on l'a déjà fait avec imajeJ par exemple)
+threshold 0
+thresholdValue 50
+
+# fichiers exportés
+exportVTI 1
+exportSeed 0
+exportContacts 0
+
+# affichage des images
+show_after_normalisation 0
+show_distance_map 0
+show_marked_contacts 1
+show_labels 1
