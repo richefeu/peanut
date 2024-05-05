@@ -15,7 +15,8 @@ nmax 1000
 
 # pour contruire une liste de voisins et fermer les zones de contact
 distance_max 10
-contactCapThickness 10 # épaisseur des capsules de contact
+contactCapThickness 10
+contactCapRadiusInc 2 
 
 # nom du fichier TIF 3D
 filenameTIF fake.tif

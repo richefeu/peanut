@@ -11,6 +11,7 @@
 // -L/usr/X11R6/lib -lX11 -lpthread
 
 #include <cmath>
+#include <deque>
 #include <fstream>
 #include <iostream>
 #include <set>
@@ -29,17 +30,20 @@ struct GrainSeed {
   int x;
   int y;
   int z;
-  float dst;
+  float dst{0.0};
   GrainSeed(int t_x, int t_y, int t_z, int t_dst) : x(t_x), y(t_y), z(t_z), dst(t_dst) {}
 };
 
 struct Neighbor {
   int i;
   int j;
-  float surface;
+
   float nx;
   float ny;
   float nz;
+
+  int state{-1};  // -1 = unknown, 0 = not touching, 1 = contact
+  float surfaceEstimation{0.0};
 };
 
 // Coordinates in voxels
@@ -292,6 +296,7 @@ std::vector<GrainSeed> findCenters(CImg<float>& img_dst_map, float rmin, int nma
 
   for (int n = 0; n < nmax; n++) {
 
+    // TODO: il existe certainement une façon plus rapide de faire ça
     float max_dst = 0.0;
     int xm = 0, ym = 0, zm = 0;
     cimg_forXYZ(img, x, y, z) {
@@ -308,16 +313,18 @@ std::vector<GrainSeed> findCenters(CImg<float>& img_dst_map, float rmin, int nma
     if (max_dst <= rmin) {
       break;
     } else {
+      std::cout << "Sphere found at position (" << xm << ", " << ym << ", " << zm << "), radius = " << max_dst << "\n";
       draw_sphere<float>(img, xm, ym, zm, (int)floor(max_dst), 0.0);
       seeds.push_back(GrainSeed(xm, ym, zm, max_dst));
     }
   }
+  std::cout << seeds.size(), " spheres found\n";
 
   return seeds;
 }
 
 //
-// Recherche les voisins
+// Recherche les voisins (en faisant l'hypothèse que les grains sont sphériques)
 //
 std::vector<Neighbor> findNeighbors(std::vector<GrainSeed>& seeds, int dmin = 10) {
 
@@ -353,26 +360,33 @@ std::vector<Neighbor> findNeighbors(std::vector<GrainSeed>& seeds, int dmin = 10
 // 26-ways floodfill using stack routines
 //
 // image        Image sur laquelle on rempli
-// distMap      Carte de distance
+// distMap.      ...
 // x,y,z        Position du point de remplissage
 // nx, ny, nz   Normal au plan du cylindre épais
 // distMaxAxe   Demi-épaisseur du cylindre
 // distMaxRad   Rayon maximum du cylindre (on arrête de remplir si la distance est nulle)
-// newColor2    Couleur de remplisable du coté du début de n
+// newColor1    Couleur de remplisable du coté du début de n
 // newColor2    Couleur de remplisable du coté de la fin de n
 template <typename T>
-bool floodFill26SPlanDistRestricted(CImg<T>& image, int x, int y, int z, float nx, float ny, float nz, float distMaxAxe,
-                                    float distMaxRad, T newColor1, T newColor2) {
+bool floodFill26SPlanDistRestricted(CImg<T>& image, CImg<float>& distMap, int x, int y, int z, float nx, float ny,
+                                    float nz, float distMaxAxe, float distMaxRad, T newColor1, T newColor2) {
   static int deltaX[] = {1, 0, 0, 1, 1, 0, 0, 1, 1, 1, 1, 1, 1, -1, 0, 0, -1, -1, 0, 0, -1, -1, -1, -1, -1, -1};
   static int deltaY[] = {0, 1, 0, -1, 1, 1, 1, 0, 0, 1, 1, -1, -1, 0, -1, 0, 1, -1, -1, -1, 0, 0, -1, -1, 1, 1};
   static int deltaZ[] = {0, 0, 1, 0, 0, -1, 1, -1, 1, -1, 1, 1, -1, 0, 0, -1, 0, 0, 1, -1, 1, -1, 1, -1, -1, 1};
 
   T oldColor = image(x, y, z);
 
-  if (newColor1 == oldColor || newColor2 == oldColor) return false;
+  if (newColor1 == oldColor || newColor2 == oldColor) {
+    return false;
+  }
 
-  std::vector<Coord> stack;
-  std::vector<T> newColorStack;
+  int width = image.width();
+  int height = image.height();
+  int depth = image.depth();
+
+  // std::deque should faster than std::vector (better cache locality)
+  std::deque<Coord> stack;
+  std::deque<T> newColorStack;
 
   stack.push_back(Coord(x, y, z));
   newColorStack.push_back(newColor2);
@@ -399,12 +413,12 @@ bool floodFill26SPlanDistRestricted(CImg<T>& image, int x, int y, int z, float n
       float rz = pz - distAxe * nz;
       float distRad2 = rx * rx + ry * ry + rz * rz;
 
-      if (nextX < 0 || nextX >= image.width() || nextY < 0 || nextY >= image.height() || nextZ < 0 ||
-          nextZ >= image.depth() || fabs(distAxe) > distMaxAxe || distRad2 > distMaxRad * distMaxRad) {
+      if (nextX < 0 || nextX >= width || nextY < 0 || nextY >= height || nextZ < 0 || nextZ >= depth ||
+          fabs(distAxe) > distMaxAxe || distRad2 > distMaxRad * distMaxRad) {
         continue;
       }
 
-      if (image(nextX, nextY, nextZ) == oldColor) {
+      if (image(nextX, nextY, nextZ) == oldColor && distMap(nextX, nextY, nextZ) > 0.1) {
         if (distAxe >= 0) {
           newColorStack.push_back(newColor2);
         } else {
@@ -424,8 +438,8 @@ bool floodFill26SPlanDistRestricted(CImg<T>& image, int x, int y, int z, float n
 // détermine la postion du contact et ajoute un disque au niveau du contact
 //
 template <typename T>
-void mark_contact(CImg<T>& image, CImg<float>& distance_map, std::vector<GrainSeed>& seeds, Neighbor& N,
-                  int contactCapThickness) {
+void addContactCap(CImg<T>& image, CImg<float>& distance_map, std::vector<GrainSeed>& seeds, Neighbor& N,
+                   int contactCapThickness, int contactCapRadiusInc) {
   int i = N.i;
   int j = N.j;
   int x1 = seeds[i].x;
@@ -438,23 +452,37 @@ void mark_contact(CImg<T>& image, CImg<float>& distance_map, std::vector<GrainSe
   N.nx = x2 - x1;
   N.ny = y2 - y1;
   N.nz = z2 - z1;
-  float norm_ = sqrt(N.nx * N.nx + N.ny * N.ny + N.nz * N.nz);
-  N.nx /= norm_;
-  N.ny /= norm_;
-  N.nz /= norm_;
+  float norm_vec_n = sqrt(N.nx * N.nx + N.ny * N.ny + N.nz * N.nz);
+  N.nx /= norm_vec_n;
+  N.ny /= norm_vec_n;
+  N.nz /= norm_vec_n;
 
   // Profil de valeurs des voxels le long de la ligne droite reliant les centres
   std::vector<ProfilePoint> voxelValues = getVoxelValuesAlongLine(distance_map, x1, y1, z1, x2, y2, z2);
-  for (size_t i = 0 ; i < voxelValues.size() ; i++){
-    if (voxelValues[i].greyLevel < 1.0) return;
+
+  // Si on trouve du vide entre les grains, c'est qu'il n'y a pas de contact
+  for (size_t i = 0; i < voxelValues.size(); i++) {
+    if (voxelValues[i].greyLevel < 0.1) {
+      std::cout << "No contact between " << i + 1 << " and " << j + 1 << '\n';
+      N.state = 0;
+      return;
+    }
   }
 
   float a, b, c;
   polyregSecondOrder(voxelValues, a, b, c);
   float min_parabola_s = -b / (2.0 * a);
   float min_parabola_dst = -b * b / (4.0 * a) + c;
+  if (min_parabola_dst < 0.1) {
+    std::cout << "No contact between " << i + 1 << " and " << j + 1 << '\n';
+    N.state = 0;
+    return;
+  }
 
-  float Rmax = min_parabola_dst + 1;
+  N.surfaceEstimation = M_PI * min_parabola_dst * min_parabola_dst;
+  N.state = 1;
+
+  float Rmax = min_parabola_dst + contactCapRadiusInc;
 
   float ux = x2 - x1;
   float uy = y2 - y1;
@@ -467,28 +495,37 @@ void mark_contact(CImg<T>& image, CImg<float>& distance_map, std::vector<GrainSe
   float xI = min_parabola_s * ux + x1;
   float yI = min_parabola_s * uy + y1;
   float zI = min_parabola_s * uz + z1;
+  std::cout << "add Cap to contact between " << i + 1 << " and " << j + 1 << '\n';
+  floodFill26SPlanDistRestricted<int>(image, distance_map, xI, yI, zI, ux, uy, uz, contactCapThickness * 0.5, Rmax,
+                                      i + 1, j + 1);
 
-  floodFill26SPlanDistRestricted<int>(image, xI, yI, zI, ux, uy, uz, contactCapThickness * 0.5, Rmax, i + 1, j + 1);
-  N.surface = 0;
   // std::cout << i << " " << j << "\n";
   // std::cout << "Surface contact : 2 PI R = " << M_PI * min_parabola_y * min_parabola_y
-  //           << ", surface réelle = " << N.surface << "\n";
+  //           << ", surface réelle = " << N.surfaceEstimation << "\n";
 }
 
 //
 // 26-ways floodfill using stack routines. This version does nothing else than floodfilling
 //
 template <typename T>
-int floodFill26S(CImg<T>& image, int x, int y, int z, T newColor) {
+int floodFill26S(CImg<T>& image, int x, int y, int z, float distMax, T newColor) {
   static int deltaX[] = {1, 0, 0, 1, 1, 0, 0, 1, 1, 1, 1, 1, 1, -1, 0, 0, -1, -1, 0, 0, -1, -1, -1, -1, -1, -1};
   static int deltaY[] = {0, 1, 0, -1, 1, 1, 1, 0, 0, 1, 1, -1, -1, 0, -1, 0, 1, -1, -1, -1, 0, 0, -1, -1, 1, 1};
   static int deltaZ[] = {0, 0, 1, 0, 0, -1, 1, -1, 1, -1, 1, 1, -1, 0, 0, -1, 0, 0, 1, -1, 1, -1, 1, -1, -1, 1};
 
   T oldColor = image(x, y, z);
 
-  if (newColor == oldColor) return 0;
+  if (newColor == oldColor) {
+    return 0;
+  }
 
-  std::vector<Coord> stack;
+  int width = image.width();
+  int height = image.height();
+  int depth = image.depth();
+  float distMax2 = distMax * distMax;
+
+  // std::deque should faster than std::vector (better cache locality)
+  std::deque<Coord> stack;
 
   stack.push_back(Coord(x, y, z));
   int nbPix = 0;
@@ -503,8 +540,13 @@ int floodFill26S(CImg<T>& image, int x, int y, int z, T newColor) {
       int nextY = pos.y + deltaY[i];
       int nextZ = pos.z + deltaZ[i];
 
-      if (nextX < 0 || nextX >= image.width() || nextY < 0 || nextY >= image.height() || nextZ < 0 ||
-          nextZ >= image.depth()) {
+      float dx = nextX - x;
+      float dy = nextY - y;
+      float dz = nextZ - z;
+      float dist2 = dx * dx + dy * dy + dz * dz;
+
+      if (nextX < 0 || nextX >= width || nextY < 0 || nextY >= height || nextZ < 0 || nextZ >= depth ||
+          dist2 > distMax2) {
         continue;
       }
 
@@ -527,12 +569,11 @@ const CImg<int> addLabels(const CImg<T>& image, std::vector<GrainSeed>& seeds) {
   CImg<int> labels(image.width(), image.height(), image.depth(), 1);
   cimg_forXYZ(image, x, y, z) { labels(x, y, z) = static_cast<int>(image(x, y, z)); }
 
-  std::cout << "Add labels for " << seeds.size() << "particles\n";
+  std::cout << "Add labels for " << seeds.size() << " particles\n";
 
-   
   for (size_t s = 0; s < seeds.size(); s++) {
     std::cout << "Label particle " << s << " / " << seeds.size() << " ... ";
-    int nbPix = floodFill26S<int>(labels, seeds[s].x, seeds[s].y, seeds[s].z, s + 1);
+    int nbPix = floodFill26S<int>(labels, seeds[s].x, seeds[s].y, seeds[s].z, seeds[s].dst + (float)radiusInc, s + 1);
     std::cout << nbPix << " voxels\n";
   }
 
@@ -543,6 +584,7 @@ const CImg<int> addLabels(const CImg<T>& image, std::vector<GrainSeed>& seeds) {
 // Export pour Paraview (.vti)
 //
 void exportToVTI(const CImg<unsigned char>& image, const char* filename) {
+  std::cout << "Save " << filename << std::endl;
   std::ofstream outfile(filename);
   if (!outfile.is_open()) {
     std::cerr << "Erreur lors de l'ouverture du fichier " << filename << std::endl;
@@ -580,7 +622,7 @@ void exportToVTI(const CImg<unsigned char>& image, const char* filename) {
   outfile << "</ImageData>" << std::endl;
   outfile << "</VTKFile>" << std::endl;
 
-  std::cout << "L'image a été exportée sous le nom : " << filename << std::endl;
+  std::cout << "Done\n";
 }
 
 class Peanut {
@@ -601,7 +643,10 @@ class Peanut {
   // distance de recherche des voisins
   int distance_max{10};
 
-  int contactCapThickness{5};  // elargir la zone de contact
+  int contactCapThickness{5};
+  int contactCapRadiusInc{2};
+
+  int radiusInc{5};
 
   std::string filenameTIF{"troisSpheres.tif"};
 
@@ -666,6 +711,10 @@ class Peanut {
         file >> distance_max;
       } else if (token == "contactCapThickness") {
         file >> contactCapThickness;
+      } else if (token == "contactCapRadiusInc") {
+        file >> contactCapRadiusInc;
+      } else if (token == "radiusInc") {
+        file >> radiusInc;
       } else if (token == "filenameTIF") {
         file >> filenameTIF;
       } else if (token == "exportVTI") {
@@ -770,7 +819,7 @@ class Peanut {
 
     std::cout << "Mark contacts\n" << std::flush;
     for (size_t i = 0; i < neighbors.size(); i++) {
-      mark_contact<int>(image, distance_map, seeds, neighbors[i], contactCapThickness);
+      addContactCap<int>(image, distance_map, seeds, neighbors[i], contactCapThickness, contactCapRadiusInc);
     }
     if (show_marked_contacts == 1) {
       image.display();
@@ -788,8 +837,8 @@ class Peanut {
       std::ofstream ctcFile("contacts.txt");
       ctcFile << "# id_i id_j S_contact nx ny" << '\n';
       for (size_t i = 0; i < neighbors.size(); i++) {
-        ctcFile << neighbors[i].i << ' ' << neighbors[i].j << ' ' << neighbors[i].surface << ' ' << neighbors[i].nx
-                << ' ' << neighbors[i].ny << ' ' << neighbors[i].nz << '\n';
+        ctcFile << neighbors[i].i << ' ' << neighbors[i].j << ' ' << neighbors[i].surfaceEstimation << ' '
+                << neighbors[i].nx << ' ' << neighbors[i].ny << ' ' << neighbors[i].nz << '\n';
       }
     }
 
