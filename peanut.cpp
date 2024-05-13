@@ -52,6 +52,13 @@ struct Coord {
   Coord(int t_x, int t_y, int t_z) : x(t_x), y(t_y), z(t_z) {}
 };
 
+
+
+struct GrainVoxSurf {
+  std::vector<Coord> voxPos;
+  std::vector<int> color; // TODO std::vector<std::vector<int>> color;
+};
+
 //
 // Algorithme de Bresenham 3D pour déterminer les valeurs sur une droite
 //
@@ -318,7 +325,7 @@ std::vector<GrainSeed> findCenters(CImg<float>& img_dst_map, float rmin, int nma
       seeds.push_back(GrainSeed(xm, ym, zm, max_dst));
     }
   }
-  std::cout << seeds.size(), " spheres found\n";
+  std::cout << seeds.size() << " spheres found\n";
 
   return seeds;
 }
@@ -560,10 +567,54 @@ int floodFill26S(CImg<T>& image, int x, int y, int z, float distMax, T newColor)
 }
 
 //
+//
+//
+template <typename T>
+GrainVoxSurf getGrainVoxSurf(CImg<T>& image, int center_x, int center_y, int center_z, int radius) {
+  static int deltaX[] = {1, 0, 0, 1, 1, 0, 0, 1, 1, 1, 1, 1, 1, -1, 0, 0, -1, -1, 0, 0, -1, -1, -1, -1, -1, -1};
+  static int deltaY[] = {0, 1, 0, -1, 1, 1, 1, 0, 0, 1, 1, -1, -1, 0, -1, 0, 1, -1, -1, -1, 0, 0, -1, -1, 1, 1};
+  static int deltaZ[] = {0, 0, 1, 0, 0, -1, 1, -1, 1, -1, 1, 1, -1, 0, 0, -1, 0, 0, 1, -1, 1, -1, 1, -1, -1, 1};
+
+  GrainVoxSurf GRAIN;
+  T colorGrain = image(center_x, center_y, center_z);
+  std::cout << "colorGrain = " << colorGrain<< '\n';
+
+  // Définir les bornes de la sphère à dessiner
+  const int min_x = std::max(1, center_x - radius + 1);
+  const int max_x = std::min(image.width() - 2, center_x + radius - 1);
+  const int min_y = std::max(1, center_y - radius + 1);
+  const int max_y = std::min(image.height() - 2, center_y + radius - 1);
+  const int min_z = std::max(1, center_z - radius + 1);
+  const int max_z = std::min(image.depth() - 2, center_z + radius - 1);
+
+  for (int x = min_x; x <= max_x; ++x) {
+    for (int y = min_y; y <= max_y; ++y) {
+      for (int z = min_z; z <= max_z; ++z) {
+
+        for (int i = 0; i < 26; i++) {
+          int nextX = x + deltaX[i];
+          int nextY = y + deltaY[i];
+          int nextZ = z + deltaZ[i];
+
+          if (image(x, y, z) == colorGrain && image(nextX, nextY, nextZ) != colorGrain) {
+            GRAIN.voxPos.push_back(Coord(x, y, z));
+            GRAIN.color.push_back(image(nextX, nextY, nextZ));
+            break;
+          }
+        }
+        
+      } // z
+    } // y
+  } // x
+
+  return GRAIN;
+}
+
+//
 // identification des grains en utilisant le floodfill
 //
 template <typename T>
-const CImg<int> addLabels(const CImg<T>& image, std::vector<GrainSeed>& seeds) {
+const CImg<int> addLabels(const CImg<T>& image, std::vector<GrainSeed>& seeds, float radiusInc) {
 
   // Crée une image int pour avoir des labels qui vont au delà de 255
   CImg<int> labels(image.width(), image.height(), image.depth(), 1);
@@ -573,11 +624,20 @@ const CImg<int> addLabels(const CImg<T>& image, std::vector<GrainSeed>& seeds) {
 
   for (size_t s = 0; s < seeds.size(); s++) {
     std::cout << "Label particle " << s << " / " << seeds.size() << " ... ";
-    int nbPix = floodFill26S<int>(labels, seeds[s].x, seeds[s].y, seeds[s].z, seeds[s].dst + (float)radiusInc, s + 1);
+    int nbPix = floodFill26S<int>(labels, seeds[s].x, seeds[s].y, seeds[s].z, seeds[s].dst + radiusInc, s + 1);
     std::cout << nbPix << " voxels\n";
   }
 
   return labels;
+}
+
+template <typename T>
+void clean(CImg<T>& image, T from, T to) {
+  cimg_forXYZ(image, x, y, z) {
+    if (image(x, y, z) == from) {
+      image(x, y, z) = to;
+    }
+  }
 }
 
 //
@@ -774,18 +834,7 @@ class Peanut {
     CImg<int> image(filenameTIF.c_str());
     image.resize(image.width(), image.height(), image.depth(), 1);  // we only need a single channel
 
-    // pour enlever l'exterieur du cylindre
-    if (eraseCylinder == 1) {
-      int x0 = (xminCyl + xmaxCyl) * 0.5;
-      int y0 = (yminCyl + ymaxCyl) * 0.5;
-      int z0 = zminCyl;
-      int x1 = x0;
-      int y1 = y0;
-      int z1 = zmaxCyl;
-      int rad = ((xmaxCyl - xminCyl) * 0.5 + (ymaxCyl - yminCyl) * 0.5) * 0.5;
-      eraseCylOutside<int>(image, x0, y0, z0, x1, y1, z1, rad);
-    }
-
+    // d'éventuels
     if (blur == 1) {
       std::cout << "Blur\n" << std::flush;
       image.blur(blurSigma);
@@ -797,9 +846,21 @@ class Peanut {
     }
 
     std::cout << "Normalize in range 0-255\n" << std::flush;
-    image.normalize(0, 255);
+    image.normalize(0, nmax);
     if (show_after_normalisation == 1) {
       image.display();
+    }
+
+    // pour enlever l'exterieur du cylindre
+    if (eraseCylinder == 1) {
+      int x0 = (xminCyl + xmaxCyl) * 0.5;
+      int y0 = (yminCyl + ymaxCyl) * 0.5;
+      int z0 = zminCyl;
+      int x1 = x0;
+      int y1 = y0;
+      int z1 = zmaxCyl;
+      int rad = ((xmaxCyl - xminCyl) * 0.5 + (ymaxCyl - yminCyl) * 0.5) * 0.5;
+      eraseCylOutside<int>(image, x0, y0, z0, x1, y1, z1, rad, nmax - 1);
     }
 
     // Carte de distance
@@ -844,10 +905,36 @@ class Peanut {
 
     std::cout << "Labelize grains\n" << std::flush;
     CImg<int> labels;
-    labels = addLabels(image, seeds);
+    labels = addLabels(image, seeds, (float)contactCapRadiusInc);
+
+    // nettoyage des couleurs nmax -> 0 pour transformer les grains trop petits en vide
+    clean(labels, nmax, 0);
+
     image.assign();  // free memory
     if (show_labels == 1) {
       labels.display();
+    }
+
+    // construire les peaux de grain
+    std::vector<GrainVoxSurf> grainSkins;
+    for (size_t i = 0; i < seeds.size(); i++) {
+      grainSkins.push_back(
+          getGrainVoxSurf(labels, seeds[i].x, seeds[i].y, seeds[i].z, (int)std::ceil(seeds[i].dst) + 5));
+    }
+
+    // provisoire
+    std::ofstream bidon("skins.txt");
+    // bidon << "TITLE = \"Skins of particles\"\n";
+    // bidon << "VARIABLES : \"x\", \"y\", \"z\", \"c\"\n";
+    // bidon << "     F:POINT\n";
+    bidon << grainSkins.size() << '\n';
+    for (size_t g = 0; g < grainSkins.size(); g++) {
+      bidon << grainSkins[g].voxPos.size() << '\n';
+      for (size_t i = 0; i < grainSkins[g].voxPos.size(); i++) {
+        bidon << grainSkins[g].voxPos[i].x << " " << grainSkins[g].voxPos[i].y << " " << grainSkins[g].voxPos[i].z
+              << " " << grainSkins[g].color[i] << "\n";
+      }
+      bidon << '\n';
     }
 
     if (exportVTI == 1) {
