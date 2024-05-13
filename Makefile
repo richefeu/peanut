@@ -9,7 +9,7 @@ GLFLAGS = `pkg-config --cflags --libs glut` -framework OpenGL
 
 .PHONY: all clean
 
-all: peanut
+all: peanut see
 
 clean:
 	rm -f *.o peanut

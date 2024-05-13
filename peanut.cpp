@@ -297,7 +297,7 @@ void polyregSecondOrder(std::vector<ProfilePoint>& prof, float& a, float& b, flo
 //
 // Trouve les centres des grains
 //
-std::vector<GrainSeed> findCenters(CImg<float>& img_dst_map, float rmin, int nmax = 1000) {
+std::vector<GrainSeed> findCenters(CImg<float>& img_dst_map, float rmin, float rmax, int nmax = 1000) {
   CImg<float> img = img_dst_map;
   std::vector<GrainSeed> seeds;
 
@@ -309,7 +309,7 @@ std::vector<GrainSeed> findCenters(CImg<float>& img_dst_map, float rmin, int nma
     cimg_forXYZ(img, x, y, z) {
       float dst = img(x, y, z, 0);
 
-      if (max_dst < dst) {
+      if (max_dst < dst && dst <= rmax) {
         max_dst = dst;
         xm = x;
         ym = y;
@@ -663,7 +663,7 @@ void exportToVTI(const CImg<unsigned char>& image, const char* filename) {
   outfile << "<Piece Extent=\"0 " << W - 1 << " 0 " << H - 1 << " 0 " << D - 1 << "\">" << std::endl;
   outfile << "<PointData Scalars=\"ImageScalars\">" << std::endl;
   // outfile << "<CellData Scalars=\"ImageScalars\">" << std::endl;
-  outfile << "<DataArray type=\"UInt8\" Name=\"ImageScalars\" format=\"ascii\">" << std::endl;
+  outfile << "<DataArray type=\"Int8\" Name=\"ImageScalars\" format=\"ascii\">" << std::endl;
 
   // Écriture des valeurs de pixel
   for (int z = 0; z < D; ++z) {
@@ -698,6 +698,7 @@ class Peanut {
   float zmaxCyl{364};
 
   float rmin{40};  // rayon minimum des grains
+  float rmax{100};  // rayon minimum des grains
   int nmax{1000};  // nombre maximum de grains à chercher
 
   // distance de recherche des voisins
@@ -765,6 +766,8 @@ class Peanut {
         file >> zmaxCyl;
       } else if (token == "rmin") {
         file >> rmin;
+      } else if (token == "rmax") {
+        file >> rmax;
       } else if (token == "nmax") {
         file >> nmax;
       } else if (token == "distance_max") {
@@ -860,7 +863,7 @@ class Peanut {
       int y1 = y0;
       int z1 = zmaxCyl;
       int rad = ((xmaxCyl - xminCyl) * 0.5 + (ymaxCyl - yminCyl) * 0.5) * 0.5;
-      eraseCylOutside<int>(image, x0, y0, z0, x1, y1, z1, rad, nmax - 1);
+      eraseCylOutside<int>(image, x0, y0, z0, x1, y1, z1, rad, 0);
     }
 
     // Carte de distance
@@ -869,9 +872,20 @@ class Peanut {
     if (show_distance_map == 1) {
       distance_map.display();
     }
+    
+    if (eraseCylinder == 1) {
+      int x0 = (xminCyl + xmaxCyl) * 0.5;
+      int y0 = (yminCyl + ymaxCyl) * 0.5;
+      int z0 = zminCyl;
+      int x1 = x0;
+      int y1 = y0;
+      int z1 = zmaxCyl;
+      int rad = ((xmaxCyl - xminCyl) * 0.5 + (ymaxCyl - yminCyl) * 0.5) * 0.5;
+      eraseCylOutside<int>(image, x0, y0, z0, x1, y1, z1, rad, nmax - 1);
+    }
 
     std::cout << "Find centers\n" << std::flush;
-    std::vector<GrainSeed> seeds = findCenters(distance_map, rmin, nmax);  // rmin = 15.0
+    std::vector<GrainSeed> seeds = findCenters(distance_map, rmin, rmax, nmax);
     std::cout << "Number found centers = " << seeds.size() << '\n';
 
     std::cout << "Find neighbors\n" << std::flush;
@@ -919,7 +933,7 @@ class Peanut {
     std::vector<GrainVoxSurf> grainSkins;
     for (size_t i = 0; i < seeds.size(); i++) {
       grainSkins.push_back(
-          getGrainVoxSurf(labels, seeds[i].x, seeds[i].y, seeds[i].z, (int)std::ceil(seeds[i].dst) + 5));
+          getGrainVoxSurf(labels, seeds[i].x, seeds[i].y, seeds[i].z, (int)std::ceil(seeds[i].dst) + radiusInc));
     }
 
     // provisoire

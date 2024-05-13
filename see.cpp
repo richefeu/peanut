@@ -1,38 +1,5 @@
 #include "see.hpp"
 
-void clear_background() {
-  glClearColor(1.0f, 1.0f, 1.0f, 1.0f);
-  glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-
-  if (!show_background) return;
-
-  glMatrixMode(GL_PROJECTION);
-  glPushMatrix();
-  glLoadIdentity();
-
-  glMatrixMode(GL_MODELVIEW);
-  glLoadIdentity();
-
-  glDisable(GL_LIGHTING);
-  glDisable(GL_DEPTH_TEST);
-
-  glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
-  glBegin(GL_QUADS);
-  glColor3ub(102, 102, 255);  // Bottom color
-  glVertex2f(-1.0f, -1.0f);
-  glVertex2f(1.0f, -1.0f);
-  glColor3f(1.0f, 1.0f, 1.0f);  // Top color
-  glVertex2f(1.0f, 1.0f);
-  glVertex2f(-1.0f, 1.0f);
-  glEnd();
-
-  glEnable(GL_LIGHTING);
-  glEnable(GL_DEPTH_TEST);
-
-  glMatrixMode(GL_PROJECTION);
-  glPopMatrix();
-}
-
 void printHelp() {
   using namespace std;
   // cout << "" << endl;
@@ -50,8 +17,26 @@ void keyboard(unsigned char Key, int /*x*/, int /*y*/) {
       printHelp();
       break;
 
+    case 'p':
+      show_grainSkins = 1 - show_grainSkins;
+      break;
+
     case 'q':
       exit(0);
+      break;
+
+    case 's':
+      show_SurfaceNetwork = 1 - show_SurfaceNetwork;
+      break;
+
+    case '1':
+      show_grainSkins_subSkin = 1 - show_grainSkins_subSkin;
+      break;
+    case '2':
+      show_grainSkins_subContact = 1 - show_grainSkins_subContact;
+      break;
+    case '3':
+      show_grainSkins_subContactWall = 1 - show_grainSkins_subContactWall;
       break;
 
     case '=': {
@@ -137,7 +122,8 @@ void motion(int x, int y) {
 }
 
 void display() {
-  clear_background();
+  // clear_background();
+  glTools::clearBackground((bool)show_background);
   adjust_clipping_plans();
   glMatrixMode(GL_MODELVIEW);
   glLoadIdentity();
@@ -147,7 +133,13 @@ void display() {
   glShadeModel(GL_SMOOTH);
   glEnable(GL_DEPTH_TEST);
 
-  drawVoxels();
+  drawLimits();
+  if (show_grainSkins == 1) {
+    drawVoxels();
+  }
+  if (show_SurfaceNetwork == 1) {
+    drawSurfaceNetwork();
+  }
 
   glFlush();
   glutSwapBuffers();
@@ -158,9 +150,8 @@ void adjust_clipping_plans() {
   glLoadIdentity();
   wh_ratio = (float)width / (float)height;
   float zf = (float)((eye - center).normalize());
-  vec3r mx = aabb.max - aabb.min;  // component_max(box.Cell.h.get_xcol(), box.Cell.h.get_ycol());  /// !!!!!!!!!
-  // mx = component_max(mx, box.Cell.h.get_zcol());
-  max_length = (GLfloat)norm(mx);
+  vec3r mx = aabb.max - aabb.min;
+  GLfloat max_length = (GLfloat)norm(mx);
   znear = zf - 0.5f * max_length;
   float close_dst = 0.1f * zf;
   if (znear < close_dst) znear = close_dst;
@@ -173,7 +164,7 @@ void fit_view() {
   vec3r dir = (eye - center);
   vec3r diag = aabb.max - aabb.min;
   dir.normalize();
-  center = 0.5 * diag;
+  center = 0.5 * (aabb.max + aabb.min);
   GLfloat d = 0.5f * (GLfloat)diag.length() / (GLfloat)(atan(view_angle * M_PI / 360.0));
   eye = center + d * dir;
 }
@@ -187,44 +178,67 @@ void reshape(int w, int h) {
   glutPostRedisplay();
 }
 
+void drawVoxelCube(float x, float y, float z) {
+  glTranslatef(x, y, z);
+  glDrawArrays(GL_QUADS, 0, 24);
+  glTranslatef(-x, -y, -z);
+}
+
 void drawVoxels() {
 
   if (mouse_mode != NOTHING) return;
 
   glEnable(GL_LIGHTING);
 
-  glShape::frame(vec3r(0., 0., 0.), 300., 300., 300.);
-  glBegin(GL_POINTS);
   for (size_t g = 0; g < grainSkins.size(); g++) {
     for (size_t v = 0; v < grainSkins[g].voxPos.size(); v++) {
       if (grainSkins[g].color[v] == 0) {
-        glColor3f(0.5f, 0.5f, 0.5f);
+        color4f col;
+        CT.getColor4f(g, &col);
+        glColor4f(col.r, col.g, col.b, 1.0f);
+        if (show_grainSkins_subSkin == 1) {
+          drawVoxelCube(grainSkins[g].voxPos[v].x, grainSkins[g].voxPos[v].y, grainSkins[g].voxPos[v].z);
+        }
+      } else if (grainSkins[g].color[v] < (int)grainSkins.size()) {
+        glColor4f(1.0f, 0.0f, 0.0f, 0.5f);
+        if (show_grainSkins_subContact == 1) {
+          drawVoxelCube(grainSkins[g].voxPos[v].x, grainSkins[g].voxPos[v].y, grainSkins[g].voxPos[v].z);
+        }
       } else {
-        glColor3f(1.0f, 0.f, 0.f);
+        glColor4f(1.0f, 1.0f, 1.0f, 0.5f);
+        if (show_grainSkins_subContactWall == 1) {
+          drawVoxelCube(grainSkins[g].voxPos[v].x, grainSkins[g].voxPos[v].y, grainSkins[g].voxPos[v].z);
+        }
       }
-      glVertex3f(grainSkins[g].voxPos[v].x, grainSkins[g].voxPos[v].y, grainSkins[g].voxPos[v].z);
     }
   }
-  glEnd();
-
 }
 
-/// Robust and portable function to test if a file exists
-bool fileExists(const char* fileName) {
-  std::fstream fin;
-  fin.open(fileName, std::ios::in);
-  if (fin.is_open()) {
-    fin.close();
-    return true;
+void drawLimits() {
+  glColor3f(1.0f, 0.0f, 0.0f);
+  glShape::obb(obb);
+}
+
+void drawSurfaceNetwork() {
+
+  glEnable(GL_LIGHTING);
+  glColor3f(0.5f, 0.5f, 0.5f);
+
+  for (size_t g = 0; g < grainSkins.size(); g++) {
+    for (size_t c = 0; c < grainSkins[g].contactPos.size(); c++) {
+      double diam = 0.5 * sqrt(grainSkins[g].contactArea[c]);
+      vec3r arrow = grainSkins[g].contactPos[c] - grainSkins[g].baryCenter;
+      glShape::tube(grainSkins[g].baryCenter, arrow, diam);
+    }
   }
-  fin.close();
-  return false;
 }
 
 bool readSkins(const char* filename) {
   std::ifstream file(filename);
   size_t nbg;
   file >> nbg;
+  vec3i cmin(50000, 50000, 50000);
+  vec3i cmax(0, 0, 0);
   for (size_t g = 0; g < nbg; g++) {
     size_t nbv;
     file >> nbv;
@@ -232,15 +246,44 @@ bool readSkins(const char* filename) {
     for (size_t v = 0; v < nbv; v++) {
       int x, y, z, c;
       file >> x >> y >> z >> c;
-      GVS.voxPos.push_back(Coord(x, y, z));
+      GVS.voxPos.push_back(vec3i(x, y, z));
       GVS.color.push_back(c);
+      if (x < cmin.x) {
+        cmin.x = x;
+      }
+      if (y < cmin.y) {
+        cmin.y = y;
+      }
+      if (z < cmin.z) {
+        cmin.z = z;
+      }
+      if (x > cmax.x) {
+        cmax.x = x;
+      }
+      if (y > cmax.y) {
+        cmax.y = y;
+      }
+      if (z > cmax.z) {
+        cmax.z = z;
+      }
     }
     grainSkins.push_back(GVS);
   }
 
-  // FAKE AABB
-  aabb.min.set(0.0, 0.0, 0.0);
-  aabb.max.set(300.0, 300.0, 300.0);
+  aabb.min.set((float)cmin.x, (float)cmin.y, (float)cmin.z);
+  aabb.max.set((float)cmax.x, (float)cmax.y, (float)cmax.z);
+  obb.center = 0.5 * (aabb.min + aabb.max);
+  obb.extent.set(0.5 * (aabb.max.x - aabb.min.x), 0.5 * (aabb.max.y - aabb.min.y), 0.5 * (aabb.max.z - aabb.min.z));
+
+  CT.setMinMax(0, (float)grainSkins.size());
+  CT.setSize((int)grainSkins.size());
+  CT.setTableID(20);  // 20 = RANDOM
+  CT.Rebuild();
+
+  for (size_t g = 0; g < grainSkins.size(); g++) {
+    grainSkins[g].computeBaryCenter();
+    grainSkins[g].computeContacts();
+  }
 
   return true;
 }
@@ -257,7 +300,6 @@ void menu(int num) {
 }
 
 void buildMenu() {
-
   glutCreateMenu(menu);  // Main menu
   glutAddMenuEntry("Quit", 0);
 }
@@ -272,10 +314,8 @@ int main(int argc, char* argv[]) {
     readSkins(argv[1]);
   } else {
     std::cout << "grrrrr\n";
+    exit(0);
   }
-
-  /// calcul du AABB
-  // TODO
 
   // ==== Init GLUT and create window
   glutInit(&argc, argv);
@@ -298,8 +338,8 @@ int main(int argc, char* argv[]) {
 
   // ==== Init the visualizer
   center.set(0.0, 0.0, 0.0);  // where we look at
-  eye.set(0.0, 0.0, 1.0);     // from where we look
-  up.set(0.0, 1.0, 0.0);      // direction (normalized)
+  eye.set(1.0, 1.0, 0.0);     // from where we look
+  up.set(0.0, 0.0, 1.0);      // direction (normalized)
 
   mouse_mode = NOTHING;
   view_angle = 45.0;
@@ -308,6 +348,11 @@ int main(int argc, char* argv[]) {
 
   glDisable(GL_CULL_FACE);
   glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
+
+  glEnableClientState(GL_VERTEX_ARRAY);
+  glVertexPointer(3, GL_FLOAT, 0, vertices);
+  glEnableClientState(GL_NORMAL_ARRAY);
+  glNormalPointer(GL_FLOAT, 0, normals);
 
   glEnable(GL_LIGHTING);
   glEnable(GL_LIGHT0);
